@@ -17,6 +17,7 @@ import { AppState } from './app.service';
   ],
   template: `
     <div>Hi</div>
+    <voronoi [numberOfPoints]="3"></voronoi>
   `
 })
 export class AppComponent implements OnInit {

@@ -15,41 +15,56 @@ export class VoronoiComponent implements OnInit {
   @Input() xMax: number;
   @Input() xMin: number;
   // should be more than 2 points
-  @Input() points: Array<Point>;
+  @Input() numberOfPoints: number;
+  points: Array<Point> = [];
   private events: Events;
   private dcel = new DCEL();
   private tree: BTree;
   private sideIdCounter = 0;
+  private sitePointIds: number[] = [];
 
   ngOnInit() {
-
-    // get y -> x prioritized events
-    
+    if (!this.numberOfPoints) {
+      return;
+    }
+    // let x = 20;
+    // let y = 20;
+    // for (let i = 0; i < this.numberOfPoints; i++) {
+    //   let point = new Point(x, y);
+    //   this.points.push(point);
+    //   this.sitePointIds.push(point.id);
+    //   x += 5;
+    //   y += 5;
+    // }
+    this.points = [new Point(10, 10), new Point(25, 35), new Point(45, 30)];
+    for (let i = 0; i < this.points.length; i++) {
+      this.sitePointIds.push(this.points[i].id);
+    }
     this.events = new Events(this.points);
 
 
 
-    let site1 = new Site(this.events.pop(), this.sideIdCounter++);
-    let site2 = new Site(this.events.pop(), this.sideIdCounter++);
+    // let site1 = new Site(this.events.pop());
+    // let site2 = new Site(this.events.pop());
 
 
-    if (site1.point.x < site2.point.x) {
-      let newSitePair = new SitePair(site1, site2);
+    // if (site1.point.x < site2.point.x) {
+    //   let newSitePair = new SitePair(site1, site2);
 
-      let newHalfEdge = new HalfEdge(site1, site2);
-      newHalfEdge.populateEdgeAndTwinInfo(newSitePair);
-      this.dcel.add(newHalfEdge);
+    //   let newHalfEdge = new HalfEdge(site1, site2);
+    //   newHalfEdge.populateEdgeAndTwinInfo(newSitePair);
+    //   this.dcel.add(newHalfEdge);
 
-      this.tree = new BTree(newSitePair, this.dcel);
-    } else {
-      let newSitePair = new SitePair(site2, site1);
+    //   this.tree = new BTree(newSitePair, this.dcel);
+    // } else {
+    //   let newSitePair = new SitePair(site2, site1);
 
-      let newHalfEdge = new HalfEdge(site2, site1);
-      newHalfEdge.populateEdgeAndTwinInfo(newSitePair);
-      this.dcel.add(newHalfEdge);
+    //   let newHalfEdge = new HalfEdge(site2, site1);
+    //   newHalfEdge.populateEdgeAndTwinInfo(newSitePair);
+    //   this.dcel.add(newHalfEdge);
 
-      this.tree = new BTree(newSitePair, this.dcel);
-    }
+    //   this.tree = new BTree(newSitePair, this.dcel);
+    // }
 
     while (!this.events.isEmpty()) {
       let event = this.events.pop();
@@ -57,25 +72,30 @@ export class VoronoiComponent implements OnInit {
     }
   }
 
-  private handleEvent(event: Point, T: BTree, D: DCEL): void {
-    if (this.points.indexOf(event) >= 0) {
-      this.handleSiteEvent(event, T, D);
+  private handleEvent(event: Point, tree: BTree, dcel: DCEL): void {
+    if (this.sitePointIds.indexOf(event.id) >= 0) {
+      this.handleSiteEvent(event, tree, dcel);
     } else {
-      this.handleCircleEvent(event, T, D);
+      this.handleCircleEvent(event, tree, dcel);
     }
   }
 
-  private handleSiteEvent(event: Point, T: BTree, D: DCEL): void {
-    let site = new Site(event, this.sideIdCounter++);
-
-    let nodeAtWhichSiteWasAdded = T.add(site, D);
+  private handleSiteEvent(event: Point, tree: BTree, dcel: DCEL): void {
+    let site = new Site(event);
+    if (!tree) {
+      tree = new BTree(site, this.dcel);
+      this.tree = tree;
+    }
+    let nodeAtWhichSiteWasAdded = tree.add(site, dcel);
     let circleEvents = this.dcel.checkAndGetCircleEvents();
-    this.events.addCircleEvents(circleEvents);
-    nodeAtWhichSiteWasAdded.potentialCircleEvents = circleEvents;
+    if (circleEvents) {
+      this.events.addCircleEvents(circleEvents);
+      nodeAtWhichSiteWasAdded.potentialCircleEvents = circleEvents;
+    }
   }
 
-  private handleCircleEvent(event: Point, T: BTree, D: DCEL): void {
-    let nodeFormedDueToSiteRemoval = T.delete(T, event, D);
+  private handleCircleEvent(event: Point, tree: BTree, dcel: DCEL): void {
+    let nodeFormedDueToSiteRemoval = tree.delete(tree, event, dcel);
     let circleEvents = this.dcel.checkAndGetCircleEvents();
     this.events.addCircleEvents(circleEvents);
     nodeFormedDueToSiteRemoval.potentialCircleEvents = circleEvents;

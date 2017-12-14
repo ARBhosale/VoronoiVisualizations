@@ -29,7 +29,10 @@ export class Point {
 }
 
 export class Site {
-    constructor(public point: Point, siteId: number) { }
+    siteId: number;
+    constructor(public point: Point) {
+        this.siteId = point.id;
+    }
 }
 
 export class Edge {
@@ -53,18 +56,27 @@ export class HalfEdge {
     nextHalfEdge: HalfEdge;
     constructor(_lSite: Site, _rSite: Site) {
         this.leftSite = _lSite;
-        this.rightSite = _rSite;
+        if (_rSite && _lSite.siteId != _rSite.siteId) {
+            this.rightSite = _rSite;
+        } else {
+            this.rightSite = null;
+        }
     }
 
     public populateEdgeAndTwinInfo(sitePair: SitePair): void {
-        if (sitePair.leftSite === this.leftSite) {
-            this.twin = new HalfEdge(sitePair.rightSite, sitePair.leftSite);
+        if (sitePair.leftSite.siteId === this.leftSite.siteId) {
+            if (sitePair.rightSite) {
+                this.twin = new HalfEdge(sitePair.rightSite, sitePair.leftSite);
+                this.twin.edge = new Edge(sitePair.rightSite, sitePair.leftSite);
+            }
             this.edge = new Edge(sitePair.leftSite, sitePair.rightSite);
-            this.twin.edge = new Edge(sitePair.rightSite, sitePair.leftSite);
-        } else if (sitePair.rightSite === this.leftSite) {
-            this.twin = new HalfEdge(sitePair.leftSite, sitePair.rightSite);
+
+        } else if (sitePair.rightSite.siteId === this.leftSite.siteId) {
+            if (sitePair.leftSite) {
+                this.twin = new HalfEdge(sitePair.leftSite, sitePair.rightSite);
+                this.twin.edge = new Edge(sitePair.leftSite, sitePair.rightSite);
+            }
             this.edge = new Edge(sitePair.rightSite, sitePair.leftSite);
-            this.twin.edge = new Edge(sitePair.leftSite, sitePair.rightSite);
         }
     }
 
@@ -85,7 +97,7 @@ export class Cell {
 }
 
 export function pointCompareForPriorityQueue(point1: Point, point2: Point): number {
-    let yDecision = point2.y - point1.y;
+    let yDecision = point1.y - point2.y;
     if (yDecision) {
         return yDecision;
     } else {
@@ -122,28 +134,55 @@ export class DCEL {
         this.halfEdges.push(halfEdge);
         for (let i = 0; i < this.halfEdges.length; i++) {
             let listHalfEdge = this.halfEdges[i];
+            if (listHalfEdge.leftSite.siteId === halfEdge.leftSite.siteId) {
+                continue;
+            }
             if (halfEdge.leftSite.point.x < listHalfEdge.leftSite.point.x) {
                 let previousHalfEdge = listHalfEdge.previousHalfEdge;
-                previousHalfEdge.nextHalfEdge = halfEdge;
-                halfEdge.previousHalfEdge = previousHalfEdge;
-                halfEdge.nextHalfEdge = listHalfEdge;
-                listHalfEdge.previousHalfEdge = halfEdge;
+                if (previousHalfEdge) {
+                    if (halfEdge.leftSite.point.x < previousHalfEdge.leftSite.point.x) {
+                        previousHalfEdge.previousHalfEdge = halfEdge;
+                        halfEdge.nextHalfEdge = previousHalfEdge;
+                    } else {
+                        previousHalfEdge.nextHalfEdge = halfEdge;
+                        halfEdge.nextHalfEdge = listHalfEdge;
+                        halfEdge.previousHalfEdge = previousHalfEdge;
+                        listHalfEdge.previousHalfEdge = halfEdge;
+                    }
+                } else {
+                    halfEdge.nextHalfEdge = listHalfEdge;
+                    listHalfEdge.previousHalfEdge = halfEdge;
+                }
             } else {
                 let nextHalfEdge = listHalfEdge.nextHalfEdge;
-                nextHalfEdge.previousHalfEdge = halfEdge;
-                halfEdge.previousHalfEdge = listHalfEdge;
-                halfEdge.nextHalfEdge = nextHalfEdge;
-                listHalfEdge.nextHalfEdge = halfEdge;
+                if (nextHalfEdge) {
+                    if (halfEdge.leftSite.point.x < nextHalfEdge.leftSite.point.x) {
+                        nextHalfEdge.previousHalfEdge = halfEdge;
+                        halfEdge.nextHalfEdge = nextHalfEdge;
+                        listHalfEdge.nextHalfEdge = halfEdge;
+                        halfEdge.previousHalfEdge = listHalfEdge;
+                    } else {
+                        nextHalfEdge.nextHalfEdge = halfEdge;
+                        halfEdge.previousHalfEdge = nextHalfEdge;
+                    }
+                } else {
+                    halfEdge.previousHalfEdge = listHalfEdge;
+                    listHalfEdge.nextHalfEdge = halfEdge;
+                }
             }
         }
     }
 
     public checkAndGetCircleEvents(): Point[] {
+        if (this.halfEdges.length < 3) {
+            return;
+        }
         let circleEvents = [];
 
         let beachLineStart = this.getStartOfBeachLine(this.halfEdges[0]);
 
-        for (let i = 0; i < this.halfEdges.length - 1; i++) {
+        for (let i = 0; i + 2 < this.halfEdges.length; i++) {
+
             let sites = this.getNext3SitesOnBeachLine(beachLineStart);
             //check if circle event
             let circle = getCircle(sites[0].point, sites[1].point, sites[2].point);
@@ -169,6 +208,8 @@ export class DCEL {
                 previousHalfEdge.nextHalfEdge = nextHalfEdge;
                 nextHalfEdge.previousHalfEdge = previousHalfEdge;
                 halfEdge = null;
+                this.halfEdges.splice(i, 1);
+                return;
             }
         }
     }
@@ -183,10 +224,10 @@ export class DCEL {
     }
 
     private getStartOfBeachLine(startPoint: HalfEdge): HalfEdge {
-        if (startPoint.previousHalfEdge === null) {
+        if (startPoint == null || !startPoint.previousHalfEdge) {
             return startPoint;
         }
-        this.getStartOfBeachLine(startPoint.previousHalfEdge);
+        return this.getStartOfBeachLine(startPoint.previousHalfEdge);
     }
 }
 
@@ -195,7 +236,11 @@ export class SitePair {
     rightSite: Site;
     constructor(left: Site, right: Site) {
         this.leftSite = left;
-        this.rightSite = right;
+        if (right && left.siteId != right.siteId) {
+            this.rightSite = right;
+        } else {
+            this.rightSite = null;
+        }
     }
 }
 
@@ -207,14 +252,24 @@ export class BTree {
     dcel: DCEL = null;
     halfEdgeBeingTraced: HalfEdge = null;
     potentialCircleEvents: Point[] = null;
+    siteArcTraced: Site = null;
 
-    constructor(pair: SitePair, dcel: DCEL) {
-        this.sitePair = pair;
+    constructor(siteArcTraced: Site, dcel: DCEL, sitePair?: SitePair) {
+        this.siteArcTraced = siteArcTraced;
         this.dcel = dcel;
+        this.sitePair = sitePair;
     }
 
     public add(site: Site, dcel: DCEL): BTree {
-        return this.addChild(this, site, dcel);
+        if (!this.sitePair) {
+            this.sitePair = new SitePair(site, null);
+            return this;
+        } else if (this.sitePair && !this.sitePair.rightSite && this.sitePair.leftSite.siteId != site.siteId) {
+            this.sitePair.rightSite = site;
+            return this.addChild(this, site, dcel);
+        } else {
+            return this.addChild(this, site, dcel);
+        }
     }
 
     public delete(startNode: BTree, circleEvent: Point, dcel: DCEL): BTree {
@@ -225,21 +280,27 @@ export class BTree {
             let node = this.delete(startNode.leftChild, circleEvent, dcel);
             if (node === null) {
                 startNode.potentialCircleEvents = null;
-                startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
+                if (startNode.halfEdgeBeingTraced) {
+                    startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
+                }
                 startNode = null;
             }
-        } else if (circleEvent.x > startNode.sitePair.rightSite.point.x) {
+        } else if (circleEvent.x >= startNode.sitePair.rightSite.point.x) {
             let node = this.delete(startNode.rightChild, circleEvent, dcel);
             if (node === null) {
                 startNode.potentialCircleEvents = null;
-                startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
+                if (startNode.halfEdgeBeingTraced) {
+                    startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
+                }
                 startNode = null;
             }
         } else {
             startNode.potentialCircleEvents = null;
-            startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
+            if (startNode.halfEdgeBeingTraced) {
+                startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
+            }
             dcel.removeHalfEdge(startNode.sitePair.leftSite, startNode.sitePair.rightSite);
-            let leftSite = startNode.sitePair.leftSite;
+            let leftSite = startNode.leftChild.sitePair.leftSite;
             startNode = this.deleteThis(startNode, circleEvent, dcel);
             let rightSite = startNode.sitePair.leftSite;
             let newHalfEdge = new HalfEdge(leftSite, rightSite);
@@ -257,7 +318,7 @@ export class BTree {
             let nextRoot = this.getNextSucessor(node);
             let leftChild = node.leftChild;
             node = nextRoot;
-            node.leftChild = this.delete(leftChild, circleEvent, dcel);
+            node.leftChild = leftChild;
 
             return node;
         }
@@ -285,7 +346,7 @@ export class BTree {
                 this.halfEdgeBeingTraced.populateEdgeAndTwinInfo(newSitePair);
                 dcel.add(this.halfEdgeBeingTraced);
 
-                let newNode = new BTree(newSitePair, this.dcel);
+                let newNode = new BTree(site, this.dcel, newSitePair);
                 newNode.parent = startNode;
                 startNode.leftChild = newNode;
                 return newNode;
@@ -302,7 +363,7 @@ export class BTree {
                 this.halfEdgeBeingTraced.populateEdgeAndTwinInfo(newSitePair);
                 dcel.add(this.halfEdgeBeingTraced);
 
-                let newNode = new BTree(newSitePair, this.dcel);
+                let newNode = new BTree(site, this.dcel, newSitePair);
                 newNode.parent = startNode;
                 startNode.rightChild = newNode;
                 return newNode;
@@ -322,7 +383,7 @@ export class BTree {
             if (node === null) {
                 let newSitePair = new SitePair(site, startNodeRightSitePair);
 
-                let newNode = new BTree(newSitePair, this.dcel);
+                let newNode = new BTree(site, this.dcel, newSitePair);
                 newNode.parent = startNode;
                 startNode.rightChild = newNode;
 
