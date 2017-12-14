@@ -1,6 +1,6 @@
 import { Component, Input, OnInit } from '@angular/core';
 
-import { Point, Events, Site, DCEL, BTree, HalfEdge, SitePair } from '../ds/all-elements';
+import { Point, Events, Site, DCEL, BTree, HalfEdge, SitePair, clipEdge } from '../ds/all-elements';
 import { BSTree } from 'typescript-collections';
 
 @Component({
@@ -22,6 +22,12 @@ export class VoronoiComponent implements OnInit {
   private tree: BTree;
   private sideIdCounter = 0;
   private sitePointIds: number[] = [];
+  private bbox = {
+    xl: 0,
+    xr: 100,
+    yt: 100,
+    yb: 50
+  };
 
   ngOnInit() {
     if (!this.numberOfPoints) {
@@ -36,7 +42,7 @@ export class VoronoiComponent implements OnInit {
     //   x += 5;
     //   y += 5;
     // }
-    this.points = [new Point(10, 10), new Point(25, 35), new Point(45, 30)];
+    this.points = [new Point(10, 30), new Point(25, 55), new Point(45, 50)];
     for (let i = 0; i < this.points.length; i++) {
       this.sitePointIds.push(this.points[i].id);
     }
@@ -70,6 +76,11 @@ export class VoronoiComponent implements OnInit {
       let event = this.events.pop();
       this.handleEvent(event, this.tree, this.dcel);
     }
+    this.clipEdges();
+  }
+
+  private clipEdges(): void {
+    
   }
 
   private handleEvent(event: Point, tree: BTree, dcel: DCEL): void {

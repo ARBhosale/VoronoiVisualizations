@@ -54,6 +54,7 @@ export class HalfEdge {
     twin: HalfEdge;
     previousHalfEdge: HalfEdge;
     nextHalfEdge: HalfEdge;
+    angle: number;
     constructor(_lSite: Site, _rSite: Site) {
         this.leftSite = _lSite;
         if (_rSite && _lSite.siteId != _rSite.siteId) {
@@ -61,6 +62,27 @@ export class HalfEdge {
         } else {
             this.rightSite = null;
         }
+
+        // 'angle' is a value to be used for properly sorting the
+        // halfsegments counterclockwise. By convention, we will
+        // use the angle of the line defined by the 'site to the left'
+        // to the 'site to the right'.
+        // However, border edges have no 'site to the right': thus we
+        // use the angle of line perpendicular to the halfsegment (the
+        // edge should have both end points defined in such case.)
+        if (_rSite) {
+            this.angle = Math.atan2(_rSite.point.y - _lSite.point.y, _rSite.point.x - _lSite.point.x);
+        }
+        else {
+            let va = this.edge.vertexA;
+            let vb = this.edge.vertexB;
+            // rhill 2011-05-31: used to call getStartpoint()/getEndpoint(),
+            // but for performance purpose, these are expanded in place here.
+            this.angle = this.edge.leftSite === _lSite ? Math.atan2(vb.x - va.x, va.y - vb.y)
+                : Math.atan2(va.x - vb.x, vb.y - va.y);
+        }
+
+
     }
 
     public populateEdgeAndTwinInfo(sitePair: SitePair): void {
@@ -94,6 +116,37 @@ export class HalfEdge {
 export class Cell {
     site: Site;
     halfedges: Array<HalfEdge>;
+
+    constructor(site: Site) {
+        this.site = site;
+        this.halfedges = [];
+    }
+
+    public addHalfEdge(halfEdge: HalfEdge): void {
+        this.halfedges.push(halfEdge);
+    }
+
+    public prepare() {
+        let halfedges = this.halfedges;
+        let iHalfedge = halfedges.length;
+        let edge: Edge;
+        // get rid of unused halfedges
+        // rhill 2011-05-27: Keep it simple, no point here in trying
+        // to be fancy: dangling edges are a typically a minority.
+        while (iHalfedge--) {
+            edge = halfedges[iHalfedge].edge;
+            if (!edge.vertexB || !edge.vertexA) {
+                halfedges.splice(iHalfedge, 1);
+            }
+        }
+        // rhill 2011-05-26: I tried to use a binary search at insertion
+        // time to keep the array sorted on-the-fly (in Cell.addHalfedge()).
+        // There was no real benefits in doing so, performance on
+        // Firefox 3.6 was improved marginally, while performance on
+        // Opera 11 was penalized marginally.
+        halfedges.sort(function (a, b) { return b.angle - a.angle; });
+        return halfedges.length;
+    };
 }
 
 export function pointCompareForPriorityQueue(point1: Point, point2: Point): number {
@@ -171,6 +224,26 @@ export class DCEL {
                 }
             }
         }
+    }
+
+    public getCells(): Cell[] {
+        let cells: Cell[] = [];
+        for (let i = 0; i < this.halfEdges.length; i++) {
+            let halfEdge = this.halfEdges[i];
+            let cell = new Cell(halfEdge.leftSite);
+            cell.addHalfEdge(halfEdge);
+            cells.push(cell);
+        }
+        return cells;
+    }
+
+    public getEdges(): Edge[] {
+        let edges: Edge[] = [];
+        for (let i = 0; i < this.halfEdges.length; i++) {
+            let edge = this.halfEdges[i].edge;
+            edges.push(edge);
+        }
+        return edges;
     }
 
     public checkAndGetCircleEvents(): Point[] {
@@ -435,3 +508,310 @@ export function getCircle(point1: Point, point2: Point, point3: Point): Point {
 
     return center;
 }
+
+// ---------------------------------------------------------------------------
+// Diagram completion methods
+
+// connect dangling edges (not if a cursory test tells us
+// it is not going to be visible.
+// return value:
+//   false: the dangling endpoint couldn't be connected
+//   true: the dangling endpoint could be connected
+export function connectEdge(edge: Edge, bbox) {
+    // skip if end point already connected
+    var vb = edge.vertexB;
+    if (!!vb) { return true; }
+
+    // make local copy for performance purpose
+    var va = edge.vertexA,
+        xl = bbox.xl,
+        xr = bbox.xr,
+        yt = bbox.yt,
+        yb = bbox.yb,
+        lSite = edge.leftSite,
+        rSite = edge.rightSite,
+        lx = lSite.point.x,
+        ly = lSite.point.y,
+        rx = rSite.point.x,
+        ry = rSite.point.y,
+        fx = (lx + rx) / 2,
+        fy = (ly + ry) / 2,
+        fm, fb;
+
+    // get the line equation of the bisector if line is not vertical
+    if (ry !== ly) {
+        fm = (lx - rx) / (ry - ly);
+        fb = fy - fm * fx;
+    }
+
+    // remember, direction of line (relative to left site):
+    // upward: left.x < right.x
+    // downward: left.x > right.x
+    // horizontal: left.x == right.x
+    // upward: left.x < right.x
+    // rightward: left.y < right.y
+    // leftward: left.y > right.y
+    // vertical: left.y == right.y
+
+    // depending on the direction, find the best side of the
+    // bounding box to use to determine a reasonable start point
+
+    // special case: vertical line
+    if (fm === undefined) {
+        // doesn't intersect with viewport
+        if (fx < xl || fx >= xr) { return false; }
+        // downward
+        if (lx > rx) {
+            if (!va) {
+                va = new Point(fx, yt);
+            }
+            else if (va.y >= yb) {
+                return false;
+            }
+            vb = new Point(fx, yb);
+        }
+        // upward
+        else {
+            if (!va) {
+                va = new Point(fx, yb);
+            }
+            else if (va.y < yt) {
+                return false;
+            }
+            vb = new Point(fx, yt);
+        }
+    }
+    // closer to vertical than horizontal, connect start point to the
+    // top or bottom side of the bounding box
+    else if (fm < -1 || fm > 1) {
+        // downward
+        if (lx > rx) {
+            if (!va) {
+                va = new Point((yt - fb) / fm, yt);
+            }
+            else if (va.y >= yb) {
+                return false;
+            }
+            vb = new Point((yb - fb) / fm, yb);
+        }
+        // upward
+        else {
+            if (!va) {
+                va = new Point((yb - fb) / fm, yb);
+            }
+            else if (va.y < yt) {
+                return false;
+            }
+            vb = new Point((yt - fb) / fm, yt);
+        }
+    }
+    // closer to horizontal than vertical, connect start point to the
+    // left or right side of the bounding box
+    else {
+        // rightward
+        if (ly < ry) {
+            if (!va) {
+                va = new Point(xl, fm * xl + fb);
+            }
+            else if (va.x >= xr) {
+                return false;
+            }
+            vb = new Point(xr, fm * xr + fb);
+        }
+        // leftward
+        else {
+            if (!va) {
+                va = new Point(xr, fm * xr + fb);
+            }
+            else if (va.x < xl) {
+                return false;
+            }
+            vb = new Point(xl, fm * xl + fb);
+        }
+    }
+    edge.vertexA = va;
+    edge.vertexB = vb;
+    return true;
+};
+
+// line-clipping code taken from:
+//   Liang-Barsky function by Daniel White
+//   http://www.skytopia.com/project/articles/compsci/clipping.html
+// Thanks!
+// A bit modified to minimize code paths
+export function clipEdge(edge: Edge, bbox) {
+    var ax = edge.vertexA.x,
+        ay = edge.vertexA.y,
+        bx = edge.vertexB.x,
+        by = edge.vertexB.y,
+        t0 = 0,
+        t1 = 1,
+        dx = bx - ax,
+        dy = by - ay;
+    // left
+    var q = ax - bbox.xl;
+    if (dx === 0 && q < 0) { return false; }
+    var r = -q / dx;
+    if (dx < 0) {
+        if (r < t0) { return false; }
+        else if (r < t1) { t1 = r; }
+    }
+    else if (dx > 0) {
+        if (r > t1) { return false; }
+        else if (r > t0) { t0 = r; }
+    }
+    // right
+    q = bbox.xr - ax;
+    if (dx === 0 && q < 0) { return false; }
+    r = q / dx;
+    if (dx < 0) {
+        if (r > t1) { return false; }
+        else if (r > t0) { t0 = r; }
+    }
+    else if (dx > 0) {
+        if (r < t0) { return false; }
+        else if (r < t1) { t1 = r; }
+    }
+    // top
+    q = ay - bbox.yt;
+    if (dy === 0 && q < 0) { return false; }
+    r = -q / dy;
+    if (dy < 0) {
+        if (r < t0) { return false; }
+        else if (r < t1) { t1 = r; }
+    }
+    else if (dy > 0) {
+        if (r > t1) { return false; }
+        else if (r > t0) { t0 = r; }
+    }
+    // bottom		
+    q = bbox.yb - ay;
+    if (dy === 0 && q < 0) { return false; }
+    r = q / dy;
+    if (dy < 0) {
+        if (r > t1) { return false; }
+        else if (r > t0) { t0 = r; }
+    }
+    else if (dy > 0) {
+        if (r < t0) { return false; }
+        else if (r < t1) { t1 = r; }
+    }
+
+    // if we reach this point, Voronoi edge is within bbox
+
+    // if t0 > 0, va needs to change
+    // rhill 2011-06-03: we need to create a new vertex rather
+    // than modifying the existing one, since the existing
+    // one is likely shared with at least another edge
+    if (t0 > 0) {
+        edge.vertexA = new Point(ax + t0 * dx, ay + t0 * dy);
+    }
+
+    // if t1 < 1, vb needs to change
+    // rhill 2011-06-03: we need to create a new vertex rather
+    // than modifying the existing one, since the existing
+    // one is likely shared with at least another edge
+    if (t1 < 1) {
+        edge.vertexB = new Point(ax + t1 * dx, ay + t1 * dy);
+    }
+
+    return true;
+}
+
+// Connect/cut edges at bounding box
+export function clipEdges(bbox, dcel: DCEL) {
+    // connect all dangling edges to bounding box
+    // or get rid of them if it can't be done
+    let edges: Edge[] = dcel.getEdges();
+
+    let iEdge = edges.length;
+    var abs_fn = Math.abs;
+    let edge: Edge = null;
+    // iterate backward so we can splice safely
+    while (iEdge--) {
+        edge = edges[iEdge];
+        // edge is removed if:
+        //   it is wholly outside the bounding box
+        //   it is actually a point rather than a line
+        if (!this.connectEdge(edge, bbox) || !this.clipEdge(edge, bbox) || (abs_fn(edge.va.x - edge.vb.x) < 1e-9 && abs_fn(edge.vertexA.y - edge.vertexB.y) < 1e-9)) {
+            edge.vertexA = edge.vertexB = null;
+            edges.splice(iEdge, 1);
+        }
+    }
+}
+
+// Close the cells.
+// The cells are bound by the supplied bounding box.
+// Each cell refers to its associated site, and a list
+// of halfedges ordered counterclockwise.
+export function closeCells(bbox, dcel: DCEL) {
+    // prune, order halfedges, then add missing ones
+    // required to close cells
+    let xl = bbox.xl;
+    let xr = bbox.xr;
+    let yt = bbox.yt;
+    let yb = bbox.yb;
+
+    let cells = dcel.getCells();
+    let iCell = cells.length;
+    let cell: Cell;
+    let iLeft, iRight;
+    let halfedges, nHalfedges;
+    let edge;
+    let startpoint, endpoint;
+    let va, vb;
+    let abs_fn = Math.abs;
+
+    while (iCell--) {
+        cell = cells[iCell];
+        // trim non fully-defined halfedges and sort them counterclockwise
+        if (!cell.prepare()) {
+            continue;
+        }
+        // close open cells
+        // step 1: find first 'unclosed' point, if any.
+        // an 'unclosed' point will be the end point of a halfedge which
+        // does not match the start point of the following halfedge
+        halfedges = cell.halfedges;
+        nHalfedges = halfedges.length;
+        // special case: only one site, in which case, the viewport is the cell
+        // ...
+        // all other cases
+        iLeft = 0;
+        while (iLeft < nHalfedges) {
+            iRight = (iLeft + 1) % nHalfedges;
+            endpoint = halfedges[iLeft].getEndpoint();
+            startpoint = halfedges[iRight].getStartpoint();
+            // if end point is not equal to start point, we need to add the missing
+            // halfedge(s) to close the cell
+            if (abs_fn(endpoint.x - startpoint.x) >= 1e-9 || abs_fn(endpoint.y - startpoint.y) >= 1e-9) {
+                // if we reach this point, cell needs to be closed by walking
+                // counterclockwise along the bounding box until it connects
+                // to next halfedge in the list
+                va = endpoint;
+                // walk downward along left side
+                if (this.equalWithEpsilon(endpoint.x, xl) && this.lessThanWithEpsilon(endpoint.y, yb)) {
+                    vb = new this.Vertex(xl, this.equalWithEpsilon(startpoint.x, xl) ? startpoint.y : yb);
+                }
+                // walk rightward along bottom side
+                else if (this.equalWithEpsilon(endpoint.y, yb) && this.lessThanWithEpsilon(endpoint.x, xr)) {
+                    vb = new this.Vertex(this.equalWithEpsilon(startpoint.y, yb) ? startpoint.x : xr, yb);
+                }
+                // walk upward along right side
+                else if (this.equalWithEpsilon(endpoint.x, xr) && this.greaterThanWithEpsilon(endpoint.y, yt)) {
+                    vb = new this.Vertex(xr, this.equalWithEpsilon(startpoint.x, xr) ? startpoint.y : yt);
+                }
+                // walk leftward along top side
+                else if (this.equalWithEpsilon(endpoint.y, yt) && this.greaterThanWithEpsilon(endpoint.x, xl)) {
+                    vb = new this.Vertex(this.equalWithEpsilon(startpoint.y, yt) ? startpoint.x : xl, yt);
+                }
+                edge = this.createBorderEdge(cell.site, va, vb);
+                halfedges.splice(iLeft + 1, 0, new this.Halfedge(edge, cell.site, null));
+                nHalfedges = halfedges.length;
+            }
+            iLeft++;
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
