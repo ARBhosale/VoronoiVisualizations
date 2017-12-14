@@ -2,6 +2,7 @@ import { Component, Input, OnInit } from '@angular/core';
 
 import { Point, Events, Site, DCEL, BTree, HalfEdge, SitePair, clipEdge } from '../ds/all-elements';
 import { BSTree } from 'typescript-collections';
+import {} from '../ds/rhill.js';
 
 @Component({
   selector: 'voronoi',
@@ -30,6 +31,10 @@ export class VoronoiComponent implements OnInit {
   };
 
   ngOnInit() {
+    // this.generateMyVoronoi();
+  }
+
+  private generateMyVoronoi(): void {
     if (!this.numberOfPoints) {
       return;
     }
@@ -80,7 +85,7 @@ export class VoronoiComponent implements OnInit {
   }
 
   private clipEdges(): void {
-    
+
   }
 
   private handleEvent(event: Point, tree: BTree, dcel: DCEL): void {
