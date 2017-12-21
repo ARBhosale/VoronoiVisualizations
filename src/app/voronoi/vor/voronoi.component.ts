@@ -1,8 +1,8 @@
 import { Component, Input, OnInit } from '@angular/core';
 
-import { Point, Events, Site, DCEL, BTree, HalfEdge, SitePair, clipEdge } from '../ds/all-elements';
+import { Point, Events, Site, DCEL, BTree, HalfEdge, SitePair, clipEdges, closeCells } from '../ds/all-elements';
 import { BSTree } from 'typescript-collections';
-import {} from '../ds/rhill.js';
+
 
 @Component({
   selector: 'voronoi',
@@ -27,11 +27,11 @@ export class VoronoiComponent implements OnInit {
     xl: 0,
     xr: 100,
     yt: 100,
-    yb: 50
+    yb: 0
   };
 
   ngOnInit() {
-    // this.generateMyVoronoi();
+    this.generateMyVoronoi();
   }
 
   private generateMyVoronoi(): void {
@@ -47,7 +47,7 @@ export class VoronoiComponent implements OnInit {
     //   x += 5;
     //   y += 5;
     // }
-    this.points = [new Point(10, 30), new Point(25, 55), new Point(45, 50)];
+    this.points = [new Point(10, 30), new Point(25, 55), new Point(45, 50), new Point(30, 60)];
     for (let i = 0; i < this.points.length; i++) {
       this.sitePointIds.push(this.points[i].id);
     }
@@ -81,7 +81,8 @@ export class VoronoiComponent implements OnInit {
       let event = this.events.pop();
       this.handleEvent(event, this.tree, this.dcel);
     }
-    this.clipEdges();
+    clipEdges(this.bbox, this.dcel);
+    closeCells(this.bbox, this.dcel);
   }
 
   private clipEdges(): void {
@@ -103,18 +104,12 @@ export class VoronoiComponent implements OnInit {
       this.tree = tree;
     }
     let nodeAtWhichSiteWasAdded = tree.add(site, dcel);
-    let circleEvents = this.dcel.checkAndGetCircleEvents();
-    if (circleEvents) {
-      this.events.addCircleEvents(circleEvents);
-      nodeAtWhichSiteWasAdded.potentialCircleEvents = circleEvents;
-    }
+    this.dcel.checkAndGetCircleEvent(tree, this.events);
   }
 
   private handleCircleEvent(event: Point, tree: BTree, dcel: DCEL): void {
     let nodeFormedDueToSiteRemoval = tree.delete(tree, event, dcel);
-    let circleEvents = this.dcel.checkAndGetCircleEvents();
-    this.events.addCircleEvents(circleEvents);
-    nodeFormedDueToSiteRemoval.potentialCircleEvents = circleEvents;
+    this.dcel.checkAndGetCircleEvent(tree, this.events);
   }
 
 }

@@ -3,6 +3,7 @@ import { listenerCount } from "cluster";
 import { prepareProfile } from "selenium-webdriver/firefox";
 import { startTimeRange } from '@angular/core/src/profile/wtf_impl';
 import { disableDebugTools } from '@angular/platform-browser/src/browser/tools/tools';
+import { Event } from '_debugger';
 
 export class Point {
     static id_holder = 0;
@@ -164,10 +165,11 @@ export class Events {
         this._points.sort((point1, point2) => pointCompareForPriorityQueue(point1, point2));
     }
 
-    public addCircleEvents(circleEvents: Point[]): void {
-        for (let i = 0; i < circleEvents.length; i++) {
-            this._points.push(circleEvents[i]);
+    public addCircleEvent(circleEvent: Point): void {
+        if (!this.hasPoint(circleEvent)) {
+            this._points.push(circleEvent);
         }
+
         this._points.sort((point1, point2) => pointCompareForPriorityQueue(point1, point2));
     }
 
@@ -178,10 +180,20 @@ export class Events {
     public isEmpty(): boolean {
         return this._points.length === 0;
     }
+
+    private hasPoint(point: Point): boolean {
+        for (let i = 0; i < this._points.length; i++) {
+            if (point.x === this._points[i].x && point.y === this._points[i].y) {
+                return true;
+            }
+        }
+        return false;
+    }
 }
 
 export class DCEL {
     halfEdges: Array<HalfEdge> = [];
+    edges: Array<Edge> = [];
 
     public add(halfEdge: HalfEdge) {
         this.halfEdges.push(halfEdge);
@@ -241,12 +253,14 @@ export class DCEL {
         let edges: Edge[] = [];
         for (let i = 0; i < this.halfEdges.length; i++) {
             let edge = this.halfEdges[i].edge;
-            edges.push(edge);
+            if (edge) {
+                edges.push(edge);
+            }
         }
-        return edges;
+        return this.edges.concat(edges);
     }
 
-    public checkAndGetCircleEvents(): Point[] {
+    public checkAndGetCircleEvent(tree: BTree, events: Events): Point {
         if (this.halfEdges.length < 3) {
             return;
         }
@@ -255,6 +269,9 @@ export class DCEL {
         let beachLineStart = this.getStartOfBeachLine(this.halfEdges[0]);
 
         for (let i = 0; i + 2 < this.halfEdges.length; i++) {
+            if (tree.hasCircleEvent(beachLineStart.nextHalfEdge)) {
+                continue;
+            }
 
             let sites = this.getNext3SitesOnBeachLine(beachLineStart);
             //check if circle event
@@ -263,13 +280,13 @@ export class DCEL {
                 let radius = getDistance(sites[0].point, sites[1].point);
                 if (radius > 0) {
                     let circleEvent = new Point(circle.x, circle.y - radius);
-                    circleEvents.push(circleEvent);
+                    tree.storeCircleEvent(beachLineStart.nextHalfEdge, circleEvent);
+                    events.addCircleEvent(circleEvent);
+                    return circleEvent;
                 }
             }
             beachLineStart = beachLineStart.nextHalfEdge;
         }
-
-        return circleEvents;
     }
 
     public removeHalfEdge(site1: Site, site2: Site): void {
@@ -278,8 +295,10 @@ export class DCEL {
             if (halfEdge.leftSite.point.id === site1.point.id && halfEdge.rightSite.point.id === site2.point.id) {
                 let previousHalfEdge = halfEdge.previousHalfEdge;
                 let nextHalfEdge = halfEdge.nextHalfEdge;
-                previousHalfEdge.nextHalfEdge = nextHalfEdge;
-                nextHalfEdge.previousHalfEdge = previousHalfEdge;
+                if (previousHalfEdge) {
+                    previousHalfEdge.nextHalfEdge = nextHalfEdge;
+                    nextHalfEdge.previousHalfEdge = previousHalfEdge;
+                }
                 halfEdge = null;
                 this.halfEdges.splice(i, 1);
                 return;
@@ -324,7 +343,7 @@ export class BTree {
     rightChild: BTree = null;
     dcel: DCEL = null;
     halfEdgeBeingTraced: HalfEdge = null;
-    potentialCircleEvents: Point[] = null;
+    potentialCircleEvent: Point = null;
     siteArcTraced: Site = null;
 
     constructor(siteArcTraced: Site, dcel: DCEL, sitePair?: SitePair) {
@@ -333,65 +352,147 @@ export class BTree {
         this.sitePair = sitePair;
     }
 
+    public storeCircleEvent(disappearingHalfEdge: HalfEdge, circleEvent: Point): void {
+        if (this.halfEdgeBeingTraced.leftSite.siteId === disappearingHalfEdge.leftSite.siteId) {
+            this.potentialCircleEvent = circleEvent;
+            return;
+        } else {
+            if (this.leftChild) {
+                this.leftChild.storeCircleEvent(disappearingHalfEdge, circleEvent);
+            }
+            if (this.rightChild) {
+                this.rightChild.storeCircleEvent(disappearingHalfEdge, circleEvent);
+            } else {
+                return;
+            }
+        }
+    }
+
+    public hasCircleEvent(halfEdge: HalfEdge): boolean {
+        if (this.halfEdgeBeingTraced.leftSite.siteId === halfEdge.leftSite.siteId && this.potentialCircleEvent) {
+            return true;
+        } else {
+            if (this.leftChild) {
+                if (this.leftChild.hasCircleEvent(halfEdge)) {
+                    return true;
+                }
+            }
+            if (this.rightChild) {
+                if (this.rightChild.hasCircleEvent(halfEdge)) {
+                    return true;
+                }
+            } else {
+                return false;
+            }
+        }
+    }
+
     public add(site: Site, dcel: DCEL): BTree {
         if (!this.sitePair) {
             this.sitePair = new SitePair(site, null);
             return this;
         } else if (this.sitePair && !this.sitePair.rightSite && this.sitePair.leftSite.siteId != site.siteId) {
-            this.sitePair.rightSite = site;
-            return this.addChild(this, site, dcel);
+            if (this.sitePair.leftSite.point.x <= site.point.x) {
+                this.sitePair.rightSite = site;
+            } else {
+                let temp = this.sitePair.leftSite;
+                this.sitePair.leftSite = site;
+                this.sitePair.rightSite = temp;
+
+                this.halfEdgeBeingTraced = new HalfEdge(this.sitePair.leftSite, this.sitePair.rightSite);
+                this.halfEdgeBeingTraced.populateEdgeAndTwinInfo(this.sitePair);
+                this.siteArcTraced = site;
+                dcel.add(this.halfEdgeBeingTraced);
+            }
+            return this;
         } else {
             return this.addChild(this, site, dcel);
         }
+    }
+
+    private getNodeWithCircleEvent(startNode: BTree, circleEvent: Point): BTree {
+        if (startNode.potentialCircleEvent && startNode.potentialCircleEvent.id === circleEvent.id) {
+            return startNode;
+        }
+        let nodeInLeft = this.getNodeWithCircleEvent(startNode.leftChild, circleEvent);
+        if (nodeInLeft) {
+            return nodeInLeft;
+        }
+        let nodeInRight = this.getNodeWithCircleEvent(startNode.rightChild, circleEvent);
+        if (nodeInRight) {
+            return nodeInRight;
+        }
+        return null;
     }
 
     public delete(startNode: BTree, circleEvent: Point, dcel: DCEL): BTree {
-        if (startNode === null) {
-            return startNode;
+        let nodeWithCircleEvent = this.getNodeWithCircleEvent(startNode, circleEvent);
+        if (!nodeWithCircleEvent) {
+            return null;
         }
-        if (circleEvent.x < startNode.sitePair.leftSite.point.x) {
-            let node = this.delete(startNode.leftChild, circleEvent, dcel);
-            if (node === null) {
-                startNode.potentialCircleEvents = null;
-                if (startNode.halfEdgeBeingTraced) {
-                    startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
-                }
-                startNode = null;
-            }
-        } else if (circleEvent.x >= startNode.sitePair.rightSite.point.x) {
-            let node = this.delete(startNode.rightChild, circleEvent, dcel);
-            if (node === null) {
-                startNode.potentialCircleEvents = null;
-                if (startNode.halfEdgeBeingTraced) {
-                    startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
-                }
-                startNode = null;
-            }
-        } else {
-            startNode.potentialCircleEvents = null;
-            if (startNode.halfEdgeBeingTraced) {
-                startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
-            }
-            dcel.removeHalfEdge(startNode.sitePair.leftSite, startNode.sitePair.rightSite);
-            let leftSite = startNode.leftChild.sitePair.leftSite;
-            startNode = this.deleteThis(startNode, circleEvent, dcel);
-            let rightSite = startNode.sitePair.leftSite;
-            let newHalfEdge = new HalfEdge(leftSite, rightSite);
-            dcel.add(newHalfEdge);
+        if (nodeWithCircleEvent.halfEdgeBeingTraced) {
+            nodeWithCircleEvent.halfEdgeBeingTraced.addEndPoint(circleEvent);
         }
+        this.deleteThis(nodeWithCircleEvent, dcel);
+        // if (circleEvent.x < startNode.sitePair.leftSite.point.x) {
+        //     let node = this.delete(startNode.leftChild, circleEvent, dcel);
+        //     if (node === null) {
+        //         startNode.potentialCircleEvent = null;
+        //         if (startNode.halfEdgeBeingTraced) {
+        //             startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
+        //         }
+        //         let parent = startNode.parent;
+        //         startNode = null;
+        //         return parent;
+        //     }
+        // } else if (circleEvent.x >= startNode.sitePair.rightSite.point.x) {
+        //     let node = this.delete(startNode.rightChild, circleEvent, dcel);
+        //     if (node === null) {
+        //         startNode.potentialCircleEvent = null;
+        //         if (startNode.halfEdgeBeingTraced) {
+        //             startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
+        //         }
+        //         let parent = startNode.parent;
+        //         startNode = null;
+        //         return parent;
+        //     }
+        // } else {
+        //     startNode.potentialCircleEvent = null;
+        //     if (startNode.halfEdgeBeingTraced) {
+        //         startNode.halfEdgeBeingTraced.addEndPoint(circleEvent);
+        //     }
+        //     dcel.removeHalfEdge(startNode.sitePair.leftSite, startNode.sitePair.rightSite);
+        //     let leftSite = startNode.leftChild.sitePair.leftSite;
+        //     startNode = this.deleteThis(startNode, circleEvent, dcel);
+        //     let rightSite = startNode.sitePair.leftSite;
+        //     let newHalfEdge = new HalfEdge(leftSite, rightSite);
+        //     dcel.add(newHalfEdge);
+        // }
         return startNode;
     }
 
-    private deleteThis(node: BTree, circleEvent: Point, dcel: DCEL): BTree {
+    private deleteThis(node: BTree, dcel: DCEL): BTree {
         if (node.leftChild && node.rightChild === null) {
             return node.leftChild;
         } else if (node.rightChild && node.leftChild === null) {
             return node.rightChild;
         } else if (node.leftChild && node.rightChild) {
-            let nextRoot = this.getNextSucessor(node);
-            let leftChild = node.leftChild;
+            let nodeHalfEdge = node.halfEdgeBeingTraced;
+            let nextRoot = this.getNextSucessor(node.rightChild);
+            if (nextRoot.sitePair.leftSite.siteId !== node.rightChild.sitePair.leftSite.siteId) {
+                nextRoot.parent.leftChild = null;
+                nextRoot.sitePair.rightSite = node.rightChild.sitePair.leftSite;
+            }
+            nextRoot.leftChild = node.leftChild;
+            dcel.removeHalfEdge(node.sitePair.leftSite, node.sitePair.rightSite);
+            dcel.edges.push(nodeHalfEdge.edge);
+            dcel.removeHalfEdge(nextRoot.leftChild.sitePair.leftSite, nextRoot.leftChild.sitePair.rightSite);
+
+            nextRoot.leftChild.sitePair.rightSite = nextRoot.sitePair.leftSite;
+            let newHalfEdge = new HalfEdge(nextRoot.leftChild.sitePair.leftSite, nextRoot.leftChild.sitePair.rightSite);
+            newHalfEdge.populateEdgeAndTwinInfo(nextRoot.leftChild.sitePair);
+            dcel.add(newHalfEdge);
             node = nextRoot;
-            node.leftChild = leftChild;
 
             return node;
         }
@@ -399,10 +500,10 @@ export class BTree {
     }
 
     private getNextSucessor(node: BTree): BTree {
-        if (node.rightChild === null) {
+        if (node.leftChild === null) {
             return node;
         }
-        return this.getNextSucessor(node.rightChild);
+        return this.getNextSucessor(node.leftChild);
     }
 
     private addChild(startNode: BTree, site: Site, dcel: DCEL): BTree {
@@ -412,14 +513,17 @@ export class BTree {
         if (site.point.x < startNode.sitePair.leftSite.point.x) {
             let node = this.addChild(startNode.leftChild, site, dcel);
             if (node === null) {
-                startNode.potentialCircleEvents = null;
+                startNode.potentialCircleEvent = null;
                 let newSitePair = new SitePair(site, startNode.sitePair.leftSite);
 
-                this.halfEdgeBeingTraced = new HalfEdge(site, startNode.sitePair.leftSite);
-                this.halfEdgeBeingTraced.populateEdgeAndTwinInfo(newSitePair);
-                dcel.add(this.halfEdgeBeingTraced);
-
                 let newNode = new BTree(site, this.dcel, newSitePair);
+
+                newNode.halfEdgeBeingTraced = new HalfEdge(site, startNode.sitePair.leftSite);
+                newNode.halfEdgeBeingTraced.populateEdgeAndTwinInfo(newSitePair);
+                newNode.siteArcTraced = site;
+                dcel.add(newNode.halfEdgeBeingTraced);
+
+
                 newNode.parent = startNode;
                 startNode.leftChild = newNode;
                 return newNode;
@@ -427,16 +531,19 @@ export class BTree {
                 return node;
             }
         } else if (site.point.x > startNode.sitePair.rightSite.point.x) {
-            startNode.potentialCircleEvents = null;
+            startNode.potentialCircleEvent = null;
             let node = this.addChild(startNode.rightChild, site, dcel);
             if (node === null) {
                 let newSitePair = new SitePair(startNode.sitePair.rightSite, site);
 
-                this.halfEdgeBeingTraced = new HalfEdge(startNode.sitePair.rightSite, site);
-                this.halfEdgeBeingTraced.populateEdgeAndTwinInfo(newSitePair);
-                dcel.add(this.halfEdgeBeingTraced);
-
                 let newNode = new BTree(site, this.dcel, newSitePair);
+
+                newNode.halfEdgeBeingTraced = new HalfEdge(startNode.sitePair.rightSite, site);
+                newNode.halfEdgeBeingTraced.populateEdgeAndTwinInfo(newSitePair);
+                newNode.siteArcTraced = startNode.sitePair.rightSite;
+                dcel.add(newNode.halfEdgeBeingTraced);
+
+
                 newNode.parent = startNode;
                 startNode.rightChild = newNode;
                 return newNode;
@@ -444,24 +551,26 @@ export class BTree {
                 return node;
             }
         } else { // when the site in the middle of the site pair in startNode
-            startNode.potentialCircleEvents = null;
-            let startNodeRightSitePair = startNode.sitePair.rightSite;
-            startNode.sitePair = new SitePair(startNode.sitePair.leftSite, site);
+            startNode.potentialCircleEvent = null;
+            let startNodeLeftSite = startNode.sitePair.leftSite;
+            startNode.sitePair = new SitePair(site, startNode.sitePair.rightSite);
 
-            this.halfEdgeBeingTraced = new HalfEdge(startNode.sitePair.leftSite, site);
-            this.halfEdgeBeingTraced.populateEdgeAndTwinInfo(startNode.sitePair);
-            dcel.add(this.halfEdgeBeingTraced);
+            dcel.removeHalfEdge(startNodeLeftSite, startNode.sitePair.rightSite);
+            startNode.halfEdgeBeingTraced = new HalfEdge(startNode.sitePair.leftSite, startNode.sitePair.rightSite);
+            startNode.halfEdgeBeingTraced.populateEdgeAndTwinInfo(startNode.sitePair);
+            dcel.add(startNode.halfEdgeBeingTraced);
 
-            let node = this.addChild(startNode.rightChild, startNodeRightSitePair, dcel);
+            let node = this.addChild(startNode.leftChild, startNodeLeftSite, dcel);
             if (node === null) {
-                let newSitePair = new SitePair(site, startNodeRightSitePair);
+                let newSitePair = new SitePair(startNodeLeftSite, site);
 
-                let newNode = new BTree(site, this.dcel, newSitePair);
+                let newNode = new BTree(startNodeLeftSite, this.dcel, newSitePair);
                 newNode.parent = startNode;
-                startNode.rightChild = newNode;
+                startNode.leftChild = newNode;
 
-                newNode.halfEdgeBeingTraced = new HalfEdge(site, startNodeRightSitePair);
+                newNode.halfEdgeBeingTraced = new HalfEdge(startNodeLeftSite, site);
                 newNode.halfEdgeBeingTraced.populateEdgeAndTwinInfo(newSitePair);
+                newNode.siteArcTraced = startNodeLeftSite;
                 dcel.add(newNode.halfEdgeBeingTraced);
                 return newNode;
             } else {
@@ -733,7 +842,7 @@ export function clipEdges(bbox, dcel: DCEL) {
         // edge is removed if:
         //   it is wholly outside the bounding box
         //   it is actually a point rather than a line
-        if (!this.connectEdge(edge, bbox) || !this.clipEdge(edge, bbox) || (abs_fn(edge.va.x - edge.vb.x) < 1e-9 && abs_fn(edge.vertexA.y - edge.vertexB.y) < 1e-9)) {
+        if (!connectEdge(edge, bbox) || !clipEdge(edge, bbox) || (abs_fn(edge.vertexA.x - edge.vertexB.x) < 1e-9 && abs_fn(edge.vertexA.y - edge.vertexB.y) < 1e-9)) {
             edge.vertexA = edge.vertexB = null;
             edges.splice(iEdge, 1);
         }
